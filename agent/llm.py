@@ -40,7 +40,7 @@ class LLMHandler:
         try:
             # 비동기 호출 (새로운 SDK 방식)
             response = await self.client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-flash-lite",
                 contents=user_context,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
