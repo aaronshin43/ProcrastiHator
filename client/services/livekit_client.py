@@ -28,7 +28,13 @@ class LiveKitClient(QObject):
     
     def connect(self):
         """LiveKit 방에 연결 (비동기 실행을 위한 스레드 시작)"""
+        # 이미 연결되어 있거나 연결 시도 중이면 중복 연결 방지
         if self._connected:
+            return
+        
+        # 연결 시도 중인 스레드가 있으면 중복 연결 방지
+        if self._thread and self._thread.isRunning():
+            print("[WARNING] LiveKit 연결이 이미 진행 중입니다")
             return
         
         # 별도 스레드에서 asyncio 이벤트 루프 실행
