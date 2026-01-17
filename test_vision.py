@@ -25,13 +25,14 @@ def main():
     print("웹캠을 확인하고 다음 동작을 테스트하세요:")
     print("  1. 눈을 2초 이상 감고 있으면 SLEEPING 이벤트 발생")
     print("  2. 얼굴을 화면 밖으로 3초 이상 이동하면 ABSENT 이벤트 발생")
-    print("  3. Ctrl+C로 종료")
+    print("  3. 디버그 창에서 'q' 키를 누르면 종료")
+    print("  4. Ctrl+C로 종료")
     print("=" * 50)
     
     app = QApplication(sys.argv)
     
-    # VisionWorker 생성
-    worker = VisionWorker()
+    # VisionWorker 생성 (디버그 창 활성화)
+    worker = VisionWorker(show_debug_window=True)
     worker.alert_signal.connect(on_alert)
     
     # 웹캠 연결 확인
