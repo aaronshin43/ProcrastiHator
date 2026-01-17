@@ -9,7 +9,19 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThread
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from shared.protocol import Packet
 from client.config import Config
+from client.services.audio import AudioPlayer
 
+class LiveKitWorker(QThread):
+    def __init__(self):
+        super().__init__()
+        self.loop = None
+        self._ready_event = asyncio.Event() # For internal sync if needed, but we use sleep in main thread
+
+    def run(self):
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        # 루프 무한 실행
+        self.loop.run_forever()
 
 class LiveKitClient(QObject):
     """LiveKit client for sending detection packets"""
@@ -22,70 +34,46 @@ class LiveKitClient(QObject):
     def __init__(self):
         super().__init__()
         self.room: Optional[rtc.Room] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._thread: Optional[QThread] = None
         self._connected = False
-    
+        self._paused = False
+        self.audio_players = {} # track_sid -> AudioPlayer
+        
+        # 영속적인 백그라운드 워커 스레드 시작
+        self._worker = LiveKitWorker()
+        self._worker.start()
+        
+        # 루프가 준비될 때까지 잠시 대기 (간단한 동기화)
+        import time
+        while self._worker.loop is None:
+            time.sleep(0.01)
+
     def connect(self):
-        """LiveKit 방에 연결 (비동기 실행을 위한 스레드 시작)"""
-        # 이미 연결되어 있거나 연결 시도 중이면 중복 연결 방지
+        """LiveKit 방에 연결 요청"""
         if self._connected:
             return
         
-        # 연결 시도 중인 스레드가 있으면 중복 연결 방지
-        if self._thread and self._thread.isRunning():
-            print("[WARNING] LiveKit 연결이 이미 진행 중입니다")
-            return
-        
-        # 별도 스레드에서 asyncio 이벤트 루프 실행
-        self._thread = LiveKitThread(self)
-        self._thread.start()
-    
+        self._paused = False
+        # 워커 스레드의 루프에 연결 태스크 제출
+        asyncio.run_coroutine_threadsafe(self._connect_room(), self._worker.loop)
+
     def disconnect(self):
-        """연결 종료"""
-        if self._thread and self._thread.isRunning():
-            self._thread.stop()
-            self._thread.wait()
-        self._connected = False
+        """연결 종료 요청"""
+        if self._connected:
+             asyncio.run_coroutine_threadsafe(self._disconnect_room(), self._worker.loop)
     
-    def send_packet(self, packet: Packet):
-        """Packet을 LiveKit으로 전송"""
-        if not self._connected or not self.room:
-            print("Warning: LiveKit not connected, packet not sent")
-            return
-        
-        # 비동기 함수를 스레드에서 실행
-        if self._loop:
-            asyncio.run_coroutine_threadsafe(
-                self._send_packet_async(packet),
-                self._loop
-            )
-    
-    async def _send_packet_async(self, packet: Packet):
-        """비동기 패킷 전송"""
-        try:
-            if self.room and self.room.local_participant:
-                data = packet.to_json().encode('utf-8')
-                await self.room.local_participant.publish_data(
-                    data,
-                    topic="detection",
-                    reliable=True
-                )
-        except Exception as e:
-            print(f"Error sending packet: {e}")
-            self.error_signal.emit(str(e))
-    
-    async def _connect_async(self):
-        """비동기 연결 로직"""
+    async def _connect_room(self):
+        """실제 연결 로직 (Coroutine)"""
+        if self._connected: return
+
         try:
             print("🔑 Generating token...")
-            # Access Token 생성
             token = Config.get_livekit_token()
             
-            # Room 생성
             self.room = rtc.Room()
             
-            # 이벤트 핸들러
+            print(f"🔗 Connecting to Room: {Config.LIVEKIT_URL}")
+            
+            # 이벤트 핸들러 설정 (Connect 전)
             @self.room.on("connected")
             def on_connected():
                 print("✅ Event: LiveKit에 연결되었습니다")
@@ -95,61 +83,97 @@ class LiveKitClient(QObject):
                 print("❌ Event: LiveKit 연결이 끊어졌습니다")
                 self._connected = False
                 self.disconnected_signal.emit()
+
+            @self.room.on("track_subscribed")
+            def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+                if track.kind == rtc.TrackKind.KIND_AUDIO:
+                    print(f"🎤 Audio Track Subscribed: {track.sid}")
+                    player = AudioPlayer(self._worker.loop)
+                    self.audio_players[track.sid] = player
+                    # 비동기 태스크로 오디오 재생 시작
+                    asyncio.run_coroutine_threadsafe(player.start(track), self._worker.loop)
+
+            @self.room.on("track_unsubscribed")
+            def on_track_unsubscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+                if track.kind == rtc.TrackKind.KIND_AUDIO:
+                    print(f"🔇 Audio Track Unsubscribed: {track.sid}")
+                    if track.sid in self.audio_players:
+                        self.audio_players[track.sid].stop()
+                        del self.audio_players[track.sid]
+
+            await self.room.connect(Config.LIVEKIT_URL, token)
             
-            # 연결
-            print(f"🔗 Connecting to Room: {Config.LIVEKIT_URL}")
-            await self.room.connect(
-                Config.LIVEKIT_URL,
-                token
-            )
-            
-            # 연결 완료 처리 (이벤트 리스너에만 의존하지 않고 명시적으로 처리)
-            print("✅ Connection established! (Async await finished)")
+            print("✅ Connection established!")
             self._connected = True
             self.connected_signal.emit()
             
-            # 무한 대기로 이벤트 루프 유지
-            stop_event = asyncio.Event()
-            await stop_event.wait()
-            
         except Exception as e:
-            print(f"❌ LiveKit 연결 오류 상세: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"❌ Connection Failed: {e}")
             self.error_signal.emit(str(e))
             self._connected = False
+
+    async def _disconnect_room(self):
+        """실제 연결 해제 로직 (Coroutine)"""
+        if not self.room: return
+        try:
+            print("🔻 Disconnecting from room...")
+            await self.room.disconnect()
+            
+            # 오디오 플레이어 정리
+            for sid, player in self.audio_players.items():
+                player.stop()
+            self.audio_players.clear()
+
+            # 명시적 정리
+            self.room = None
+            self._connected = False
+            print("✅ Disconnected successfully")
+        except Exception as e:
+            print(f"Error disconnecting: {e}")
+
+    def quit(self):
+        """애플리케이션 종료 시 호출"""
+        if self._worker.loop:
+            self._worker.loop.call_soon_threadsafe(self._worker.loop.stop)
+        self._worker.quit()
+        self._worker.wait()
+
+    def set_paused(self, paused: bool):
+        """전송 일시중지 설정"""
+        self._paused = paused
+        status = "Paused" if paused else "Resumed"
+        print(f"⏸️ LiveKit Client is now {status}")
+
+    def is_paused(self) -> bool:
+        return self._paused
 
     def is_connected(self) -> bool:
         """연결 상태 확인"""
         return self._connected
 
-
-class LiveKitThread(QThread):
-    """LiveKit 비동기 이벤트 루프를 실행하는 스레드"""
-    
-    def __init__(self, client: LiveKitClient):
-        super().__init__()
-        self.client = client
-        self._running = False
-    
-    def run(self):
-        """스레드 실행 - asyncio 이벤트 루프 시작"""
-        print("🧵 LiveKitThread started")
-        self._running = True
-        self.client._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.client._loop)
+    def send_packet(self, packet: Packet):
+        """Packet을 LiveKit으로 전송"""
+        if not self._connected or not self.room or self._paused:
+            return
         
-        try:
-            self.client._loop.run_until_complete(self.client._connect_async())
-        except Exception as e:
-            print(f"❌ LiveKit thread crash: {e}")
-        finally:
-            print("⏹️ LiveKit loop closing")
-            self.client._loop.close()
-            self.client._loop = None
+        # Room 연결 상태 확인
+        if self.room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
+            return
+        
+        # 워커 루프에 패킷 전송 태스크 제출
+        if self._worker.loop and self._worker.loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._send_packet_async(packet),
+                self._worker.loop
+            )
     
-    def stop(self):
-        """스레드 종료"""
-        self._running = False
-        if self.client._loop:
-            self.client._loop.call_soon_threadsafe(self.client._loop.stop)
+    async def _send_packet_async(self, packet: Packet):
+        """비동기 패킷 전송"""
+        if not self.room or not self.room.local_participant: return
+        try:
+            data = packet.to_json().encode('utf-8')
+            await self.room.local_participant.publish_data(
+                data, topic="detection", reliable=True
+            )
+        except Exception as e:
+            print(f"Error sending packet: {e}")

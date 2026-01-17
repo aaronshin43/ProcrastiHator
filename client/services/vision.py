@@ -19,11 +19,12 @@ from shared.constants import VisionEvents, PacketCategory
 class VisionWorker(QThread):
     # 메인 UI로 보낼 신호 정의
     alert_signal = pyqtSignal(object) # Packet 객체를 보냄
+    debug_frame_signal = pyqtSignal(np.ndarray) # 디버그 이미지(OpenCV 포맷) 보냄
 
     def __init__(self, show_debug_window=False):
         super().__init__()
         self.running = False
-        self.show_debug_window = show_debug_window  # 디버그 창 표시 여부
+        self.show_debug_window = show_debug_window  # 디버그 이미지를 송출할지 여부
         # MediaPipe Face Landmarker 초기화 (0.10.x API)
         # 모델 파일 경로
         model_path = os.path.join(os.path.dirname(__file__), 'face_landmarker.task')
@@ -418,6 +419,11 @@ class VisionWorker(QThread):
         
         return frame
 
+    def stop(self):
+        """작업 종료"""
+        self.running = False
+        self.wait()
+
     def run(self):
         self.running = True
         cap = cv2.VideoCapture(0)
@@ -533,7 +539,7 @@ class VisionWorker(QThread):
                             )
                             self.alert_signal.emit(packet)
                     
-                    # 디버그 창 표시 (얼굴이 있든 없든 항상 표시)
+                    # 디버그 이미지 송출 (GUI에서 표시하기 위함)
                     if self.show_debug_window:
                         # 얼굴 랜드마크 추출
                         face_landmarks_for_draw = None
@@ -545,10 +551,8 @@ class VisionWorker(QThread):
                             face_landmarks_for_draw,
                             avg_ear, pitch, yaw, is_sleeping, is_absent, is_gaze_away
                         )
-                        cv2.imshow('Vision Debug', debug_frame)
-                        # 'q' 키를 누르면 종료
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            self.running = False
+                        # OpenCV 창 대신 시그널 전송
+                        self.debug_frame_signal.emit(debug_frame)
                     
                     # time.sleep(0.05) # 0.1초 대기 (10 FPS)
                 
@@ -569,8 +573,8 @@ class VisionWorker(QThread):
             # 정리 작업은 항상 실행
             self.running = False
             cap.release()
-            if self.show_debug_window:
-                cv2.destroyAllWindows()
+            
+            # 여기서 OpenCV 창 닫는 코드는 삭제 (UI에서 관리)
             print("[OK] Vision Worker 종료")
     
     def stop(self):

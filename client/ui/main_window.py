@@ -94,6 +94,11 @@ class PersonalityCard(QFrame):
             """)
 
 class MainWindow(QMainWindow):
+    # 세션 시작 시그널 (Key A) - 사용 안함 (Global Key로 대체됨)
+    start_session_signal = pyqtSignal()
+    # 디버그 윈도우 토글 시그널 (Key B) - 사용 안함 (Global Key로 대체됨)
+    toggle_debug_signal = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Personality Selector Design")
