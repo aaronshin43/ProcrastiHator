@@ -12,14 +12,7 @@ personality_cards = [
 
 # Voice 닉네임 데이터
 voice_data = [
-    "harry",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    ""
+    "tony", "steve", "alice", "kevin", "luna", "oscar", "felix", "claire"
 ]
 
 # 전역 변수: 사용자 설정
