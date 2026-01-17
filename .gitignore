@@ -1,0 +1,34 @@
+# --- Python 기본 ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# --- 환경변수 및 비밀키 (절대 올리지 마세요!) ---
+.env
+.env.local
+api_keys.txt
+
+# --- IDE 설정 (팀원마다 다를 수 있음) ---
+.vscode/
+.idea/
+*.swp
+
+# --- OS 관련 ---
+.DS_Store
+Thumbs.db
+
+# --- 로그 파일 ---
+*.log
+logs/
+
+# --- 빌드 관련 (혹시 배포한다면) ---
+build/
+dist/
+*.spec
