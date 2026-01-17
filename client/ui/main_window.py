@@ -3,8 +3,8 @@ import os
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QGridLayout, 
                              QVBoxLayout, QHBoxLayout, QFrame, QMainWindow, QPushButton)
 from PyQt6.QtCore import Qt, pyqtSignal
-from name import personality_cards, voice_data
-import name
+from client.ui.name import personality_cards, voice_data
+import client.ui.name as name
 
 class BaseCard(QFrame):
     """카드 위젯의 공통 베이스 클래스"""
@@ -132,6 +132,11 @@ class VoiceCard(BaseCard):
         print(f"저장된 음성: {name.user_voice}")
 
 class MainWindow(QMainWindow):
+    # 세션 시작 시그널 (Key A) - 사용 안함 (Global Key로 대체됨)
+    start_session_signal = pyqtSignal()
+    # 디버그 윈도우 토글 시그널 (Key B) - 사용 안함 (Global Key로 대체됨)
+    toggle_debug_signal = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Personality Selector Design")
