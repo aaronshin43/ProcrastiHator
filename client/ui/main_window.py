@@ -365,6 +365,9 @@ class MainWindow(QMainWindow):
         # 초기 데이터 로드
         self.load_voice_items()
         
+        # 상세 패널에 초기 탭 정보 전달
+        self.detail_panel.set_current_tab(self.current_tab)
+        
         # 키보드 포커스 설정
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
@@ -412,12 +415,27 @@ class MainWindow(QMainWindow):
         # 기존 아이템 안전하게 제거
         self.clear_list_layout()
         
+        # Voice 이름 -> 이미지 파일명 매핑 (personality_cards와 동일한 이미지 사용)
+        voice_icon_mapping = {
+            "Gordon Ramsey": "gorden.png",
+            "Gigachad": "chad.png",
+            "Uncle Roger": "roger.png",
+            "Anime Girl": "monika.png",
+            "Korean Mom": "korea_mom.png",
+            "Drill Sergeant": "surgeant.png",
+            "Sportscaster": "caster.png",
+            "Shakespeare": "poem.png"
+        }
+        
         # 새 아이템 생성
         for i, voice_name in enumerate(voice_data):
             # 이전에 선택된 항목인지 확인
             is_selected = (voice_name == self.selected_voice_item)
             
-            item = PipBoyListItem(voice_name, icon="", is_selected=is_selected)
+            # Voice 이름에 해당하는 이미지 파일명 가져오기
+            icon_file = voice_icon_mapping.get(voice_name, "")
+            
+            item = PipBoyListItem(voice_name, icon=icon_file, is_selected=is_selected)
             # 람다 클로저 문제 해결: 기본값 사용
             item.clicked.connect(lambda clicked_item, name=voice_name: self.handle_voice_item_click(clicked_item, name))
             self.list_layout.addWidget(item)
@@ -427,8 +445,8 @@ class MainWindow(QMainWindow):
             if is_selected:
                 self.current_selected_item = voice_name
                 self.current_selected_index = i
-                # 상세 정보도 복원
-                self.detail_panel.set_item(voice_name, f"Voice: {voice_name}", icon="🔊")
+                # 상세 정보도 복원 (이미지 포함)
+                self.detail_panel.set_item(voice_name, f"Voice: {voice_name}", icon=icon_file)
         
         self.list_layout.addStretch()
         
@@ -476,16 +494,21 @@ class MainWindow(QMainWindow):
         # 탭 변경 시 선택 상태는 유지 (해제하지 않음)
         self.current_tab = tab_name
         
-        # 현재 탭에 맞는 선택 상태로 전환
+        # 현재 탭에 맞는 선택 상태로 전환 및 아이템 로드
         if tab_name == "VOICE":
             self.current_selected_item = self.selected_voice_item
             self.load_voice_items()
+            # load_voice_items() 후에 상세 패널에 현재 탭 정보 전달
+            # (이렇게 하면 current_item이 올바르게 설정된 후에 탭 정보가 전달됨)
+            self.detail_panel.set_current_tab(tab_name)
             # 선택된 항목이 없으면 기본 메시지 표시
             if not self.selected_voice_item:
                 self.detail_panel.set_item("VOICE SELECTION", "Select a voice from the list", icon="")
         elif tab_name == "PERSONALITY":
             self.current_selected_item = self.selected_personality_item
             self.load_personality_items()
+            # load_personality_items() 후에 상세 패널에 현재 탭 정보 전달
+            self.detail_panel.set_current_tab(tab_name)
             # 선택된 항목이 없으면 기본 메시지 표시
             if not self.selected_personality_item:
                 self.detail_panel.set_item("PERSONALITY SELECTION", "Select a personality from the list", icon="")
@@ -520,6 +543,21 @@ class MainWindow(QMainWindow):
         if clicked_item is None:
             return
         
+        # Voice 이름 -> 이미지 파일명 매핑 (personality_cards와 동일한 이미지 사용)
+        voice_icon_mapping = {
+            "Gordon Ramsey": "gorden.png",
+            "Gigachad": "chad.png",
+            "Uncle Roger": "roger.png",
+            "Anime Girl": "monika.png",
+            "Korean Mom": "korea_mom.png",
+            "Drill Sergeant": "surgeant.png",
+            "Sportscaster": "caster.png",
+            "Shakespeare": "poem.png"
+        }
+        
+        # Voice 이름에 해당하는 이미지 파일명 가져오기
+        icon_file = voice_icon_mapping.get(voice_name, "")
+        
         # 모든 Voice 아이템의 선택 상태를 해제하고, 클릭된 아이템만 선택 상태로 변경
         for i, item in enumerate(self.voice_items):
             if item == clicked_item:
@@ -531,8 +569,8 @@ class MainWindow(QMainWindow):
                 # 음성 저장
                 name.user_voice = voice_name
                 print(f"[PIP-BOY] 저장된 음성: {name.user_voice}")
-                # 상세 정보 업데이트
-                self.detail_panel.set_item(voice_name, f"Voice: {voice_name}", icon="🔊")
+                # 상세 정보 업데이트 (이미지 포함)
+                self.detail_panel.set_item(voice_name, f"Voice: {voice_name}", icon=icon_file)
                 # 스크롤하여 선택된 아이템 보이게
                 try:
                     self.scroll_to_item(item)
