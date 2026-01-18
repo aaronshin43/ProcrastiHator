@@ -33,16 +33,20 @@ class AgentMemory:
             self.violation_counts[event_type] = 0
         self.violation_counts[event_type] += 1
 
-    def should_alert(self, event_type: str) -> bool:
+    def should_alert(self, event_type: str, cooldown_seconds: float = None) -> bool:
         """
         해당 이벤트에 대해 지금 반응(LLM 호출/TTS)해야 하는지 결정합니다.
         (쿨다운 체크)
+        :param cooldown_seconds: 선택적 쿨다운 시간 오버라이드. 없으면 기본값 사용.
         """
         now = time.time()
         last_time = self.last_alert_time.get(event_type, 0)
+        
+        # 사용할 쿨다운 시간 결정 (인자 값 우선)
+        effective_cooldown = cooldown_seconds if cooldown_seconds is not None else self.cooldown_seconds
 
         # 쿨다운 시간이 지나야만 True 반환
-        if now - last_time > self.cooldown_seconds:
+        if now - last_time > effective_cooldown:
             self.last_alert_time[event_type] = now
             return True
         

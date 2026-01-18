@@ -19,6 +19,7 @@ from client.ui.debug_window import DebugWindow
 from client.ui.floating_widget import FloatingWidget
 from client.services.vision import VisionWorker
 from client.services.livekit_client import LiveKitClient
+from client.services.screen import ScreenWorker # Import ScreenWorker
 from client.services.stats import SessionStats
 from client.config import Config
 #from shared.context import * # Assuming... wait, better be explicit
@@ -97,6 +98,8 @@ def main():
         # 세션 통계 매니저 생성
         session_stats = SessionStats()
         vision_worker = VisionWorker(show_debug_window=True)
+        # 스크린 워커 생성
+        screen_worker = ScreenWorker()
     except Exception as e:
         print(f"❌ Service Initialization Error: {e}")
         return
@@ -114,6 +117,11 @@ def main():
     vision_worker.alert_signal.connect(session_stats.record_event)
     # (1) VisionWorker 결과 -> LiveKitClient (서버로 데이터 전송)
     vision_worker.alert_signal.connect(livekit_client.send_packet)
+    
+    # (1.5) ScreenWorker 결과 -> LiveKitClient 및 로그
+    screen_worker.alert_signal.connect(session_stats.record_event)
+    screen_worker.alert_signal.connect(livekit_client.send_packet)
+    screen_worker.alert_signal.connect(lambda p: print(f"🖥️ Screen Event: {p.event} - {p.data.get('window_title','Unknown')}"))
     
     # (2) VisionWorker 프레임 -> DebugWindow (화면 표시)
     vision_worker.debug_frame_signal.connect(debug_window.update_image)
@@ -149,6 +157,7 @@ def main():
             
             # 서비스 종료
             vision_worker.stop()
+            screen_worker.stop() # ScreenWorker 종료
             livekit_client.disconnect()
             
             session_stats.stop_session()
@@ -162,6 +171,9 @@ def main():
 
             print("   - Starting Vision Worker...")
             vision_worker.start()
+            
+            print("   - Starting Screen Worker...")
+            screen_worker.start()
             
             print("   - Connecting LiveKit...")
             livekit_client.connect()
@@ -234,6 +246,10 @@ def main():
     if vision_worker.isRunning():
         vision_worker.stop()
         vision_worker.wait()
+        
+    if screen_worker.isRunning():
+        screen_worker.stop()
+        screen_worker.wait()
     
     # LiveKit 클라이언트 완전 종료 (루프 stop)
     if livekit_client:
