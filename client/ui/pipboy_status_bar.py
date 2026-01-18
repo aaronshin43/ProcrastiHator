@@ -52,7 +52,7 @@ class PipBoyStatusBar(QWidget):
         layout.setSpacing(0)  # 간격 제거
         
         # 좌측: 제목
-        self.title_label = QLabel("PROCRASTIHATOR")
+        self.title_label = QLabel("PROCRASTIHATER")
         self.title_label.setStyleSheet("""
             font-family: 'Courier New', monospace;
             font-size: 18px;
