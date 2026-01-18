@@ -3,6 +3,7 @@ class VisionEvents:
     """Vision detection events"""
     SLEEPING = "SLEEPING"  # 눈을 장시간 감고 있음 (졸음)
     ABSENT = "ABSENT"  # 얼굴이 화면에 감지되지 않음
+    USER_RETURNED = "USER_RETURNED"  # 자리 비움 후 복귀
     GAZE_AWAY = "GAZE_AWAY"  # 시선을 다른 곳으로 돌림
     PHONE_DETECTED = "PHONE_DETECTED"  # 휴대폰 감지
 

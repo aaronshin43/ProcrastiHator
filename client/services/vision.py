@@ -64,7 +64,7 @@ class VisionWorker(QThread):
                 object_options = vision.ObjectDetectorOptions(
                     base_options=object_base_options,
                     max_results=5,  # 최대 5개 객체 감지
-                    score_threshold=0.5,  # 최소 신뢰도 50%
+                    score_threshold=0.4,  # 최소 신뢰도 40% (얼굴 위치 상관없이 더 잘 잡히도록 완화)
                     category_allowlist=["cell phone"]  # 휴대폰만 감지
                 )
                 self.object_detector = vision.ObjectDetector.create_from_options(object_options)
@@ -95,7 +95,7 @@ class VisionWorker(QThread):
         self.GAZE_AWAY_CONSECUTIVE_FRAMES = 30  # 연속 프레임 수 (약 3초로 단축 - 더 빠르게 반응)
         
         # 휴대폰 감지 임계값
-        self.PHONE_SCORE_THRESHOLD = 0.5  # 휴대폰 감지 최소 신뢰도
+        self.PHONE_SCORE_THRESHOLD = 0.35  # 휴대폰 감지 최소 신뢰도
         
         # 얼굴 방향 계산용 추가 랜드마크
         self.LEFT_EYE_INNER = 133
@@ -123,7 +123,11 @@ class VisionWorker(QThread):
         self.CHEEK_POSITION_THRESHOLD = 0.25
         self.CHEEK_NOSE_Z_THRESHOLD = 0.12
         self.CHEEK_Z_DIFF_PASS_THRESHOLD = 0.015
-    
+
+        # 자리비움 상태 추적
+        self.is_in_absent_mode = False
+        self.absent_start_time = 0.0
+
     def calculate_ear(self, landmarks, eye_indices):
         """Eye Aspect Ratio (EAR) 계산"""
         # MediaPipe 0.10.x는 landmarks가 리스트 형태
@@ -583,6 +587,26 @@ class VisionWorker(QThread):
                         # 연속으로 볼이 안 보이면 GAZE_AWAY 감지
                         if self.gaze_away_counter >= self.GAZE_AWAY_CONSECUTIVE_FRAMES:
                             is_gaze_away = True
+                        
+                        # [복귀 감지 로직] 얼굴이 감지되었고, 이전에 자리비움 상태였다면 복귀 처리
+                        if self.is_in_absent_mode:
+                            absent_duration = time.time() - self.absent_start_time
+                            print(f"[VISION] User Returned! Absent duration: {absent_duration:.1f}s")
+                            
+                            # 복귀 패킷 전송 (쿨다운 없이 즉시 전송)
+                            packet = Packet(
+                                event=VisionEvents.USER_RETURNED,
+                                data={
+                                    "confidence": 1.0, 
+                                    "duration": int(absent_duration), # 초 단위
+                                },
+                                meta=PacketMeta(category=PacketCategory.VISION)
+                            )
+                            self.alert_signal.emit(packet)
+                            
+                            # 모드 리셋
+                            self.is_in_absent_mode = False
+
                     else:
                         # 얼굴이 감지되지 않음 - 얼굴 부재 카운터 증가
                         self.no_face_counter += 1
@@ -606,7 +630,18 @@ class VisionWorker(QThread):
                     
                     # 얼굴 부재 감지 시 Packet 발송
                     if is_absent:
-                        if self.should_alert(VisionEvents.ABSENT):
+                        # 자리비움 모드 진입 (최초 1회만 기록)
+                        if not self.is_in_absent_mode:
+                            self.is_in_absent_mode = True
+                            self.absent_start_time = time.time()
+                            print(f"[VISION] User Absent Mode Started")
+
+                        # 알림 전송 (쿨다운 적용 - 지속적인 알림 방지, 
+                        # 사용자가 '처음 잔소리, 계속 자리 비움시 잔소리는 그만'이라고 했으므로
+                        # should_alert의 쿨다운을 매우 길게 잡거나(예: 60초), 
+                        # Agent 측에서 ABSENT 처리 후 기억에 있으면 무시하도록 할 수 있음.
+                        # 여기서는 일단 20초마다 리마인드 패킷은 보내되, Agent가 무시하도록 유도)
+                        if self.should_alert(VisionEvents.ABSENT, cooldown_seconds=20):
                             packet = Packet(
                                 event=VisionEvents.ABSENT,
                                 data={"confidence": 0.9, "duration": self.no_face_counter},
