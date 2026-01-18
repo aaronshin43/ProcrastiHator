@@ -12,12 +12,11 @@ livekit-plugins-silero         # VAD (말 끊김 감지)
 PyQt6>=6.7.0
 
 # --- Vision & Sensing ---
-opencv-python                  # 웹캠 캡처
-mediapipe                      # 얼굴/눈 감지
-numpy                          # 이미지 연산
+opencv-python                  # Webcam capture
+mediapipe                      
+numpy                          
 
-# --- System & Utils ---
-# 윈도우 창 제목 가져오기 (윈도우에서만 설치됨)
+
 pywin32; sys_platform == 'win32'
 psutil                         # 프로세스 모니터링
 python-dotenv                  # .env 파일 로드
