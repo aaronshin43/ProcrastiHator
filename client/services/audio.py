@@ -5,6 +5,24 @@ import numpy as np
 import asyncio
 from livekit import rtc
 
+# Per-voice playback gain (live agent audio). Values >1.0 amplify but may clip.
+VOICE_GAIN_MULTIPLIER = {
+    # Boost to match Gordon Ramsey perceived loudness
+    "Anime Girl": 3.0,
+    "Shakespeare": 3.0,
+}
+
+
+def _apply_gain_int16(data: np.ndarray, gain: float) -> np.ndarray:
+    """Apply gain to int16 PCM with clipping."""
+    if gain <= 1.0:
+        return data
+
+    # Convert to int32 for headroom, apply gain, clip back to int16.
+    amplified = (data.astype(np.int32) * gain).round()
+    np.clip(amplified, -32768, 32767, out=amplified)
+    return amplified.astype(np.int16)
+
 class AudioSink(threading.Thread):
     def __init__(self):
         super().__init__()
@@ -51,6 +69,19 @@ class AudioSink(threading.Thread):
         # AudioFrame을 numpy로 변환 및 정보 추출
         # frame.data는 int16 memoryview
         data = np.frombuffer(frame.data, dtype=np.int16)
+
+        # Boost quiet voices (Anime Girl / Shakespeare) on playback.
+        # We read the current selected voice from UI globals.
+        try:
+            from client.ui import name as ui_name
+
+            voice_name = getattr(ui_name, "user_voice", "") or ""
+            gain = float(VOICE_GAIN_MULTIPLIER.get(voice_name, 1.0))
+            if gain != 1.0:
+                data = _apply_gain_int16(data, gain)
+        except Exception:
+            pass
+
         # livekit 0.17+ AudioFrame uses num_channels instead of channels
         self.queue.put((data, frame.sample_rate, frame.num_channels))
     

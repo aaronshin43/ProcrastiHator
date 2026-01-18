@@ -7,6 +7,12 @@ Pip-Boy 스타일 상세 정보 패널
 import os
 import json
 import time
+import tempfile
+import traceback
+import uuid
+import json as _json
+import shutil
+import subprocess
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton
 from PyQt6.QtCore import Qt, QUrl, QTimer
 from PyQt6.QtGui import QPainter, QColor, QPen, QPixmap
@@ -17,6 +23,29 @@ from client.ui.audio_visualizer import AudioVisualizer
 def write_log(hypothesis_id, location, message, data=None):
     # Debug logging disabled - remove hardcoded paths for production
     pass
+# #endregion
+
+# #region agent log helper (debug mode)
+_DEBUG_LOG_PATH = r"d:\GitHub\ProcrastiHator\.cursor\debug.log"
+_DEBUG_SESSION_ID = "debug-session"
+_DEBUG_RUN_ID = "run1"
+
+def _dbg_log(hypothesis_id: str, location: str, message: str, data=None):
+    try:
+        payload = {
+            "id": f"log_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}",
+            "timestamp": int(time.time() * 1000),
+            "sessionId": _DEBUG_SESSION_ID,
+            "runId": _DEBUG_RUN_ID,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 # #endregion
 
 class TitleMarkerWidget(QWidget):
@@ -52,6 +81,11 @@ class PipBoyDetailPanel(QWidget):
         
         # 오디오 재생 관련
         self.audio_output = QAudioOutput()
+        # Maximize volume for preview playback (some assets are quieter)
+        try:
+            self.audio_output.setVolume(1.0)
+        except Exception:
+            pass
         self.media_player = QMediaPlayer()
         self.media_player.setAudioOutput(self.audio_output)
         self.media_player.mediaStatusChanged.connect(self.on_media_status_changed)
@@ -353,6 +387,171 @@ class PipBoyDetailPanel(QWidget):
             audio_file = os.path.join(audio_dir, "voice_example.wav")
         
         return audio_file
+
+    def _maybe_boost_preview_audio(self, voice_name: str, audio_file: str) -> str:
+        """
+        Try to boost quiet preview audio for specific voices by exporting a boosted WAV to temp.
+        If conversion fails (e.g., no ffmpeg), return the original file.
+        """
+        # 3x louder ~= +9.54 dB (20*log10(3))
+        gain_db_map = {
+            "Anime Girl": 9.5,
+            "Shakespeare": 9.5,
+        }
+        gain_db = gain_db_map.get(voice_name)
+        # #region agent log
+        _dbg_log(
+            "C",
+            "pipboy_detail_panel.py:_maybe_boost_preview_audio:gain_lookup",
+            "preview_gain_lookup",
+            {
+                "voice_name": voice_name,
+                "audio_file": audio_file,
+                "audio_ext": os.path.splitext(audio_file)[1],
+                "gain_db": gain_db,
+            },
+        )
+        # #endregion
+        if not gain_db:
+            return audio_file
+
+        try:
+            from pydub import AudioSegment
+            from pydub.effects import normalize
+
+            # Cache boosted files in temp dir
+            base = os.path.splitext(os.path.basename(audio_file))[0]
+            boosted_path = os.path.join(tempfile.gettempdir(), f"procrastihator_{base}_boosted.wav")
+
+            # If cached exists and is newer than source, reuse
+            if os.path.exists(boosted_path):
+                try:
+                    if os.path.getmtime(boosted_path) >= os.path.getmtime(audio_file):
+                        # #region agent log
+                        _dbg_log(
+                            "B",
+                            "pipboy_detail_panel.py:_maybe_boost_preview_audio:cache_hit",
+                            "preview_boost_cache_hit",
+                            {
+                                "voice_name": voice_name,
+                                "boosted_path": boosted_path,
+                                "source_mtime": os.path.getmtime(audio_file),
+                                "boosted_mtime": os.path.getmtime(boosted_path),
+                            },
+                        )
+                        # #endregion
+                        return boosted_path
+                except Exception:
+                    # #region agent log
+                    _dbg_log(
+                        "B",
+                        "pipboy_detail_panel.py:_maybe_boost_preview_audio:cache_hit_mtime_error",
+                        "preview_boost_cache_hit_mtime_error",
+                        {"voice_name": voice_name, "boosted_path": boosted_path},
+                    )
+                    # #endregion
+                    return boosted_path
+
+            seg = AudioSegment.from_file(audio_file)
+            seg = seg.apply_gain(gain_db)
+            # Prevent ugly clipping while still making it loud
+            seg = normalize(seg)
+            seg.export(boosted_path, format="wav")
+            # #region agent log
+            _dbg_log(
+                "D",
+                "pipboy_detail_panel.py:_maybe_boost_preview_audio:export_ok",
+                "preview_boost_export_ok",
+                {"voice_name": voice_name, "boosted_path": boosted_path, "gain_db": gain_db},
+            )
+            # #endregion
+            return boosted_path
+        except Exception as e:
+            # If pydub is missing, try ffmpeg CLI as a fallback.
+            try:
+                ffmpeg = shutil.which("ffmpeg")
+                # #region agent log
+                _dbg_log(
+                    "E",
+                    "pipboy_detail_panel.py:_maybe_boost_preview_audio:ffmpeg_detect",
+                    "preview_boost_ffmpeg_detect",
+                    {"voice_name": voice_name, "ffmpeg_path": ffmpeg},
+                )
+                # #endregion
+                if ffmpeg:
+                    # Cache boosted files in temp dir
+                    base = os.path.splitext(os.path.basename(audio_file))[0]
+                    boosted_path = os.path.join(tempfile.gettempdir(), f"procrastihator_{base}_boosted.wav")
+
+                    cmd = [
+                        ffmpeg,
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        "-i",
+                        audio_file,
+                        "-filter:a",
+                        f"volume={gain_db}dB",
+                        boosted_path,
+                    ]
+
+                    # #region agent log
+                    _dbg_log(
+                        "E",
+                        "pipboy_detail_panel.py:_maybe_boost_preview_audio:ffmpeg_try",
+                        "preview_boost_ffmpeg_try",
+                        {"voice_name": voice_name, "cmd": cmd, "boosted_path": boosted_path},
+                    )
+                    # #endregion
+
+                    completed = subprocess.run(cmd, capture_output=True, text=True)
+                    if completed.returncode == 0 and os.path.exists(boosted_path):
+                        # #region agent log
+                        _dbg_log(
+                            "E",
+                            "pipboy_detail_panel.py:_maybe_boost_preview_audio:ffmpeg_ok",
+                            "preview_boost_ffmpeg_ok",
+                            {"voice_name": voice_name, "boosted_path": boosted_path},
+                        )
+                        # #endregion
+                        return boosted_path
+
+                    # #region agent log
+                    _dbg_log(
+                        "E",
+                        "pipboy_detail_panel.py:_maybe_boost_preview_audio:ffmpeg_failed",
+                        "preview_boost_ffmpeg_failed",
+                        {
+                            "voice_name": voice_name,
+                            "returncode": completed.returncode,
+                            "stderr_tail": (completed.stderr or "")[-200:],
+                        },
+                    )
+                    # #endregion
+            except Exception as e2:
+                # #region agent log
+                _dbg_log(
+                    "E",
+                    "pipboy_detail_panel.py:_maybe_boost_preview_audio:ffmpeg_exception",
+                    "preview_boost_ffmpeg_exception",
+                    {"voice_name": voice_name, "error": str(e2)},
+                )
+                # #endregion
+
+            # #region agent log
+            _dbg_log(
+                "A",
+                "pipboy_detail_panel.py:_maybe_boost_preview_audio:exception",
+                "preview_boost_exception_fallback_to_original",
+                {
+                    "voice_name": voice_name,
+                    "audio_file": audio_file,
+                    "error": str(e),
+                    "traceback": traceback.format_exc().splitlines()[-1] if traceback.format_exc() else "",
+                },
+            )
+            # #endregion
+            return audio_file
     
     def play_voice_example(self):
         """음성 예시 재생"""
@@ -362,6 +561,33 @@ class PipBoyDetailPanel(QWidget):
             return
         
         audio_file = self._get_voice_audio_file(self.current_item)
+        # #region agent log
+        _dbg_log(
+            "C",
+            "pipboy_detail_panel.py:play_voice_example:before_boost",
+            "preview_play_before_boost",
+            {
+                "voice_name": self.current_item,
+                "audio_file": audio_file,
+                "exists": os.path.exists(audio_file),
+                "ext": os.path.splitext(audio_file)[1],
+            },
+        )
+        # #endregion
+        audio_file = self._maybe_boost_preview_audio(self.current_item, audio_file)
+        # #region agent log
+        _dbg_log(
+            "C",
+            "pipboy_detail_panel.py:play_voice_example:after_boost",
+            "preview_play_after_boost",
+            {
+                "voice_name": self.current_item,
+                "audio_file": audio_file,
+                "exists": os.path.exists(audio_file),
+                "ext": os.path.splitext(audio_file)[1],
+            },
+        )
+        # #endregion
         
         if not os.path.exists(audio_file):
             print(f"[WARNING] Audio file not found: {audio_file}")

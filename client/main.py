@@ -24,7 +24,7 @@ from client.services.stats import SessionStats
 from client.config import Config
 #from shared.context import * # Assuming... wait, better be explicit
 from shared.protocol import Packet, PacketMeta
-from shared.constants import SystemEvents, PacketCategory
+from shared.constants import SystemEvents, PacketCategory, VisionEvents, ScreenEvents
 from dotenv import load_dotenv
 import keyboard
 import time
@@ -122,11 +122,50 @@ def main():
     vision_worker.alert_signal.connect(record_stats_if_active)
     # (1) VisionWorker 결과 -> LiveKitClient (서버로 데이터 전송)
     vision_worker.alert_signal.connect(livekit_client.send_packet)
+
+    def update_floating_mood(packet: Packet):
+        """
+        감지 이벤트 기반으로 floating 캐릭터 이미지를 angry/normal로 토글.
+        - Vision: SLEEPING/ABSENT/GAZE_AWAY/PHONE_DETECTED -> angry
+        - Vision: USER_RETURNED -> normal
+        - Screen: WINDOW_CHANGE -> distracting 키워드면 angry, 아니면 normal
+        """
+        try:
+            # 세션이 pause면 잔소리/angry 표시도 멈춤
+            if livekit_client.is_paused():
+                floating_widget.set_angry(False)
+                return
+
+            event = getattr(packet, "event", None)
+            if event in (
+                VisionEvents.SLEEPING,
+                VisionEvents.ABSENT,
+                VisionEvents.GAZE_AWAY,
+                VisionEvents.PHONE_DETECTED,
+            ):
+                floating_widget.set_angry_for(6.0)
+                return
+
+            if event == VisionEvents.USER_RETURNED:
+                floating_widget.set_angry(False)
+                return
+
+            if event == ScreenEvents.WINDOW_CHANGE:
+                if session_stats.is_distracting_window(packet):
+                    floating_widget.set_angry_for(6.0)
+                else:
+                    floating_widget.set_angry(False)
+        except Exception:
+            # UI 토글 실패는 기능 전체를 죽이지 않도록 무시
+            pass
+
+    vision_worker.alert_signal.connect(update_floating_mood)
     
     # (1.5) ScreenWorker 결과 -> LiveKitClient 및 로그
     screen_worker.alert_signal.connect(record_stats_if_active)
     screen_worker.alert_signal.connect(livekit_client.send_packet)
     screen_worker.alert_signal.connect(lambda p: print(f"🖥️ Screen Event: {p.event} - {p.data.get('window_title','Unknown')}"))
+    screen_worker.alert_signal.connect(update_floating_mood)
     
     # (2) VisionWorker 프레임 -> DebugWindow (화면 표시)
     vision_worker.debug_frame_signal.connect(debug_window.update_image)
