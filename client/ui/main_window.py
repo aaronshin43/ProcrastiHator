@@ -11,7 +11,7 @@ from client.ui.pipboy_tab_bar import PipBoyTabBar
 from client.ui.pipboy_list_item import PipBoyListItem
 from client.ui.pipboy_detail_panel import PipBoyDetailPanel
 from client.ui.stats_view import StatsSummaryWidget, StatsFeedbackWidget
-from client.services.stats_feedback import start_stats_feedback
+# from client.services.stats_feedback import start_stats_feedback # Removed (Server-side logic)
 from client.ui.crt_effects import CRTEffectsWidget
 from client.ui.pipboy_design import get_crt_background_style, get_title_text_style
 import client.ui.name as name
@@ -586,7 +586,7 @@ class MainWindow(QMainWindow):
     def show_stats(self, summary: dict):
         """
         세션 종료 후 Stats 탭을 노출하고 자동으로 전환하며, summary를 화면에 표시.
-        (피드백 LLM 호출은 별도 서비스에서 처리)
+        (Agent에서 이미 생성된 리뷰를 포함하여 전달받음)
         """
         try:
             self.stats_summary_widget.set_summary(summary)
@@ -595,8 +595,11 @@ class MainWindow(QMainWindow):
 
         try:
             personality = getattr(name, "user_personality", "") or ""
+            # Agent에서 보내준 review 텍스트 사용
+            review_text = summary.get("review", "No feedback available.")
+            
             self.stats_feedback_widget.set_personality(personality)
-            self.stats_feedback_widget.set_feedback_text("Generating feedback...")
+            self.stats_feedback_widget.set_feedback_text(review_text)
         except Exception:
             pass
 
@@ -609,34 +612,6 @@ class MainWindow(QMainWindow):
 
         # UI 스왑 실행
         self.on_tab_changed("STATS")
-
-        # LLM 피드백 생성 (백그라운드)
-        try:
-            self._stats_feedback_request_id += 1
-            req_id = self._stats_feedback_request_id
-            personality = getattr(name, "user_personality", "") or ""
-
-            worker = start_stats_feedback(req_id, personality, summary, parent=self)
-
-            def _on_ready(rid: int, text: str):
-                if rid != self._stats_feedback_request_id:
-                    return
-                self.stats_feedback_widget.set_feedback_text(text)
-
-            def _on_error(rid: int, err: str):
-                if rid != self._stats_feedback_request_id:
-                    return
-                self.stats_feedback_widget.set_feedback_text(err)
-
-            worker.feedback_ready.connect(_on_ready)
-            worker.feedback_error.connect(_on_error)
-            self._stats_feedback_worker = worker  # keep ref
-            worker.start()
-        except Exception as e:
-            try:
-                self.stats_feedback_widget.set_feedback_text(f"(LLM unavailable) {e}")
-            except Exception:
-                pass
 
     def handle_voice_item_click(self, clicked_item, voice_name, voice_id=None):
         """Voice 아이템 클릭 처리"""
