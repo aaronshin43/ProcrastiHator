@@ -13,7 +13,7 @@ from livekit.plugins import elevenlabs, openai, silero
 # shared 폴더 import를 위한 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.protocol import Packet
-from shared.constants import SystemEvents, ScreenEvents
+from shared.constants import SystemEvents, ScreenEvents, VisionEvents
 from agent.memory import AgentMemory
 from agent.prompts import SYSTEM_PROMPT
 from agent.llm import LLMHandler
@@ -344,6 +344,21 @@ async def entrypoint(ctx: JobContext):
                         # "Neutral" 키워드가 없어도 위 두 분류에 안 속하면 중립으로 간주
                         neutral_check_task = asyncio.create_task(check_neutral_window_later(packet))
                         return
+            
+            # Special Handling for Vision Events (Cooldowns)
+            if packet.event == VisionEvents.ABSENT:
+                 # 자리비움: 처음에만 잔소리하고, 긴 시간동안 조용히 함
+                 if memory.should_alert(packet.event, cooldown_seconds=60): # 1분 쿨다운
+                      memory.add_event(packet.event, packet.data)
+                      asyncio.create_task(scold_user(packet))
+                 return
+
+            if packet.event == VisionEvents.USER_RETURNED:
+                 # 복귀: 딴짓하다 왔냐고 갈굼 (짧은 쿨다운)
+                 if memory.should_alert(packet.event, cooldown_seconds=5):
+                      memory.add_event(packet.event, packet.data)
+                      asyncio.create_task(scold_user(packet))
+                 return
 
             # 1. 반응 결정 (쿨다운 체크)
             if memory.should_alert(packet.event):
