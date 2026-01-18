@@ -566,6 +566,18 @@ class MainWindow(QMainWindow):
                 # 성격 저장
                 name.user_personality = title
                 print(f"[PIP-BOY] 저장된 성격: {name.user_personality}")
+
+                # 성격 변경 패킷 생성 및 시그널 방출
+                packet = Packet(
+                    event=SystemEvents.PERSONALITY_UPDATE,
+                    data={
+                        "personality": title,
+                        "description": desc
+                    },
+                    meta=PacketMeta(category=PacketCategory.SYSTEM)
+                )
+                self.personality_changed_signal.emit(packet)
+
                 # 상세 정보 업데이트
                 self.detail_panel.set_item(title, desc, icon=icon)
                 # 스크롤하여 선택된 아이템 보이게
@@ -724,30 +736,6 @@ class MainWindow(QMainWindow):
             detail_panel_height = target_height - 2 - 60
             if detail_panel_height > 0:
                 self.detail_panel.setFixedHeight(detail_panel_height)
-
-        # 성격 변경 패킷 생성 및 시그널 방출
-        packet = Packet(
-            event=SystemEvents.PERSONALITY_UPDATE,
-            data={
-                "personality": clicked_card.title,
-                "description": clicked_card.desc
-            },
-            meta=PacketMeta(category=PacketCategory.SYSTEM)
-        )
-        self.personality_changed_signal.emit(packet)
-        print(f"Personality Selected & Signal Emitted: {clicked_card.title} ({clicked_card.desc})")
-
-        # 성격 변경 패킷 생성 및 시그널 방출
-        packet = Packet(
-            event=SystemEvents.PERSONALITY_UPDATE,
-            data={
-                "personality": clicked_card.title,
-                "description": clicked_card.desc
-            },
-            meta=PacketMeta(category=PacketCategory.SYSTEM)
-        )
-        self.personality_changed_signal.emit(packet)
-        print(f"Personality Selected & Signal Emitted: {clicked_card.title} ({clicked_card.desc})")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
