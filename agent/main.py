@@ -13,6 +13,7 @@ from livekit.plugins import elevenlabs
 # shared 폴더 import를 위한 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.protocol import Packet
+from shared.constants import SystemEvents
 from agent.memory import AgentMemory
 from agent.prompts import SYSTEM_PROMPT
 from agent.llm import LLMHandler
@@ -38,12 +39,18 @@ async def entrypoint(ctx: JobContext):
     # 3. Audio Track 변수 (첫 오디오 데이터 수신 시 초기화)
     audio_source = None
     audio_track = None
+    
+    # 4. 현재 성격 (기본값)
+    current_persona = "Strict Devil Instructor"
 
     async def scold_user(packet: Packet):
-        nonlocal audio_source, audio_track
+        nonlocal audio_source, audio_track, current_persona
         logger.info(f"⚡ 처형 프로세스 시작: {packet.event}")
 
-        # A. 문맥 생성
+        # A. 문맥 생성 (프롬프트에 페르소나 주입)
+        # SYSTEM_PROMPT의 {persona} 부분을 현재 성격으로 치환
+        formatted_system_prompt = SYSTEM_PROMPT.format(persona=current_persona)
+
         context_str = f"""
         [현재 상황]
         - 이벤트: {packet.event}
@@ -55,8 +62,8 @@ async def entrypoint(ctx: JobContext):
 
         # B. LLM 멘트 생성
         try:
-            text = await llm_handler.get_scolding(SYSTEM_PROMPT, context_str)
-            logger.info(f"🗣️ 생성된 잔소리: {text}")
+            text = await llm_handler.get_scolding(formatted_system_prompt, context_str)
+            logger.info(f"🗣️ 생성된 잔소리 ({current_persona}): {text}")
         except Exception as e:
             logger.error(f"LLM Error: {e}")
             return
@@ -81,8 +88,10 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.on("data_received")
     def on_data(data_packet, participant=None, kind=None, topic=None):
+        nonlocal current_persona # 외부 변수 수정을 위해 선언
+        
+        # 1. payload 추출 (DataPacket 객체일 수도, bytes일 수도 있음)
         try:
-            # 1. payload 추출 (DataPacket 객체일 수도, bytes일 수도 있음)
             if hasattr(data_packet, 'data'):
                 payload = data_packet.data
             else:
@@ -93,23 +102,55 @@ async def entrypoint(ctx: JobContext):
                 decoded_str = payload.decode('utf-8')
             else:
                 decoded_str = str(payload)
-
-            logger.info(f"📨 Raw Data Received: {decoded_str}")
-
-            packet = Packet.from_json(decoded_str)
-
-            
-            # 1. 기억 저장
-            memory.add_event(packet.event, packet.data)
-            
-            # 2. 반응 결정 (쿨다운 체크)
-            if memory.should_alert(packet.event):
-                asyncio.create_task(scold_user(packet))
-            else:
-                logger.info(f"🥶 쿨다운 중: {packet.event}")
                 
         except Exception as e:
-            print(f"Error: {e}")
+            logger.error(f"❌ 데이터 디코딩 실패: {e}")
+            return
+
+        # 3. 패킷 파싱
+        try:
+            packet = Packet.from_json(decoded_str)
+            logger.info(f"📨 Packet Received: {packet.event}") # 수신 로그 강화
+        except Exception as e:
+            logger.error(f"❌ JSON 파싱 실패: {e} / Raw: {decoded_str}")
+            return
+
+        try:
+            # 0. 성격 변경 이벤트 처리
+            if packet.event == SystemEvents.PERSONALITY_UPDATE:
+                p_name = packet.data.get("personality", "Unknown")
+                p_desc = packet.data.get("description", "")
+                
+                # 이름과 설명을 결합하여 LLM에게 풍부한 컨텍스트 제공
+                if p_desc:
+                    current_persona = f"{p_name}\n(Character Description: {p_desc})"
+                else:
+                    current_persona = p_name
+                    
+                logger.info(f"🎭 성격 변경됨: {current_persona}")
+                return
+
+            # 0.5 세션 시작 이벤트 (기억 초기화)
+            if packet.event == SystemEvents.SESSION_START:
+                logger.info("---------- 🆕 New Session Started: Memory Cleared ----------")
+                memory.clear()
+                return
+
+            # 1. 반응 결정 (쿨다운 체크)
+            if memory.should_alert(packet.event):
+                # 2. 반응하기로 결정된 경우에만 기억 저장
+                memory.add_event(packet.event, packet.data)
+                
+                # 3. 처형(잔소리) 시작
+                asyncio.create_task(scold_user(packet))
+            else:
+                # 쿨다운 중이거나 무시할 이벤트
+                pass
+                
+        except Exception as e:
+            logger.error(f"❌ 로직 처리 중 오류: {e}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

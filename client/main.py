@@ -19,7 +19,11 @@ from client.ui.debug_window import DebugWindow
 from client.ui.floating_widget import FloatingWidget
 from client.services.vision import VisionWorker
 from client.services.livekit_client import LiveKitClient
+from client.services.stats import SessionStats
 from client.config import Config
+#from shared.context import * # Assuming... wait, better be explicit
+from shared.protocol import Packet, PacketMeta
+from shared.constants import SystemEvents, PacketCategory
 from dotenv import load_dotenv
 import keyboard
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -76,6 +80,8 @@ def main():
     try:
         livekit_client = LiveKitClient()
         # show_debug_window=True: VisionWorker가 처리한 프레임을 시그널로 방출하게 함
+        # 세션 통계 매니저 생성
+        session_stats = SessionStats()
         vision_worker = VisionWorker(show_debug_window=True)
     except Exception as e:
         print(f"❌ Service Initialization Error: {e}")
@@ -90,6 +96,8 @@ def main():
     key_manager = GlobalKeyManager()
 
     # 5. 시그널 연결: 서비스 -> UI/네트워크
+    # (1-2) VisionWorker 결과 -> SessionStats (통계 저장)
+    vision_worker.alert_signal.connect(session_stats.record_event)
     # (1) VisionWorker 결과 -> LiveKitClient (서버로 데이터 전송)
     vision_worker.alert_signal.connect(livekit_client.send_packet)
     
@@ -102,28 +110,56 @@ def main():
     livekit_client.error_signal.connect(lambda e: print(f"❌ LiveKit Error: {e}"))
 
     # 6. 시그널 연결: UI 제어 -> 서비스 제어
+    import time
+    last_toggle_time = 0
+    TOGGLE_COOLDOWN = 1.0 # 1초 쿨다운
+
     def toggle_session():
         """Key A: 세션 시작/종료 토글"""
+        nonlocal last_toggle_time
+        current_time = time.time()
+        
+        if current_time - last_toggle_time < TOGGLE_COOLDOWN:
+            print(f"⏳ Toggle Cooldown (Ignored): {current_time - last_toggle_time:.2f}s")
+            return
+        
+        last_toggle_time = current_time
+
         if vision_worker.isRunning():
             print("🛑 Stopping Session triggered by Key A")
             # 세션 종료 로직
+            # UI 상태 변경 (먼저 변경하여 반응성 확보)
+            floating_widget.hide()
+            debug_window.hide()
+            main_window.show()
+            
+            # 서비스 종료
             vision_worker.stop()
             livekit_client.disconnect()
             
-            # UI 상태 변경
-            floating_widget.hide()
-            debug_window.hide() # 세션 종료시 디버그 창도 닫음 (선택사항)
-            main_window.show()
+            session_stats.stop_session()
+            print("📊 Final Stats:", session_stats.get_summary())
             print("   - Show Main Window, Hide Floating Widget")
         else:
             print("🚀 Starting Session triggered by Key A")
             # 세션 시작 로직
+            # 통계 리셋
+            session_stats.reset()
+
             print("   - Starting Vision Worker...")
             vision_worker.start()
             
             print("   - Connecting LiveKit...")
             livekit_client.connect()
             
+            # 세션 시작 패킷 전송 (버퍼링됨)
+            start_packet = Packet(
+                event=SystemEvents.SESSION_START,
+                data={},
+                meta=PacketMeta(category=PacketCategory.SYSTEM)
+            )
+            livekit_client.send_packet(start_packet)
+
             # UI 상태 변경
             main_window.hide()
             floating_widget.show()
@@ -161,6 +197,9 @@ def main():
     key_manager.toggle_session_signal.connect(toggle_session)
     key_manager.toggle_debug_signal.connect(toggle_debug_window)
     key_manager.toggle_pause_signal.connect(toggle_pause)
+
+    # 성격 변경 시그널 연결 (MainWindow -> LiveKitClient)
+    main_window.personality_changed_signal.connect(livekit_client.send_packet)
 
     # Legacy Local Connections (Optional: Keep default A/B in local windoes if desired, 
     # but user requested change to Alt+A/B globally, so we rely on key_manager priority)

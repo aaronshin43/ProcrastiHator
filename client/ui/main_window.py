@@ -6,6 +6,15 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from client.ui.name import personality_cards, voice_data
 import client.ui.name as name
 
+# shared 폴더 import (성격 변경 패킷 전송을 위해)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from shared.constants import SystemEvents, PacketCategory
+from shared.protocol import Packet, PacketMeta
+
 class BaseCard(QFrame):
     """카드 위젯의 공통 베이스 클래스"""
     # 클릭 이벤트를 부모에게 알리기 위한 시그널
@@ -136,6 +145,8 @@ class MainWindow(QMainWindow):
     start_session_signal = pyqtSignal()
     # 디버그 윈도우 토글 시그널 (Key B) - 사용 안함 (Global Key로 대체됨)
     toggle_debug_signal = pyqtSignal()
+    # 성격 변경 시그널
+    personality_changed_signal = pyqtSignal(Packet)
 
     def __init__(self):
         super().__init__()
@@ -382,6 +393,18 @@ class MainWindow(QMainWindow):
                 card.set_selected(True)
             else:
                 card.set_selected(False)
+
+        # 성격 변경 패킷 생성 및 시그널 방출
+        packet = Packet(
+            event=SystemEvents.PERSONALITY_UPDATE,
+            data={
+                "personality": clicked_card.title,
+                "description": clicked_card.desc
+            },
+            meta=PacketMeta(category=PacketCategory.SYSTEM)
+        )
+        self.personality_changed_signal.emit(packet)
+        print(f"Personality Selected & Signal Emitted: {clicked_card.title} ({clicked_card.desc})")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

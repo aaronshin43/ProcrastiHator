@@ -8,6 +8,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThread
 # shared 폴더 import를 위한 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from shared.protocol import Packet
+from shared.constants import SystemEvents
 from client.config import Config
 from client.services.audio import AudioPlayer
 
@@ -35,9 +36,12 @@ class LiveKitClient(QObject):
         super().__init__()
         self.room: Optional[rtc.Room] = None
         self._connected = False
+        self._should_reconnect = False # 자동 재연결 플래그
         self._paused = False
         self.audio_players = {} # track_sid -> AudioPlayer
-        
+        self._pending_personality_packet: Optional[Packet] = None
+        self._pending_session_start_packet: Optional[Packet] = None
+
         # 영속적인 백그라운드 워커 스레드 시작
         self._worker = LiveKitWorker()
         self._worker.start()
@@ -48,7 +52,7 @@ class LiveKitClient(QObject):
             time.sleep(0.01)
 
     def connect(self):
-        """LiveKit 방에 연결 요청"""
+        self._should_reconnect = True # 연결 의도 표시
         if self._connected:
             return
         
@@ -57,6 +61,8 @@ class LiveKitClient(QObject):
         asyncio.run_coroutine_threadsafe(self._connect_room(), self._worker.loop)
 
     def disconnect(self):
+        """연결 종료 요청"""
+        self._should_reconnect = False # 재연결 비활성화f):
         """연결 종료 요청"""
         if self._connected:
              asyncio.run_coroutine_threadsafe(self._disconnect_room(), self._worker.loop)
@@ -79,10 +85,15 @@ class LiveKitClient(QObject):
                 print("✅ Event: LiveKit에 연결되었습니다")
             
             @self.room.on("disconnected")
-            def on_disconnected():
-                print("❌ Event: LiveKit 연결이 끊어졌습니다")
+            def on_disconnected(*args):
+                print("❌ Event: LiveKit 연결이 끊어졌습니다", args)
                 self._connected = False
                 self.disconnected_signal.emit()
+
+                # 자동 재연결 시도
+                if self._should_reconnect:
+                    print("🔄 세션 유지 중... 3초 후 재연결을 시도합니다.")
+                    asyncio.create_task(self._retry_connection())
 
             @self.room.on("track_subscribed")
             def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
@@ -106,11 +117,33 @@ class LiveKitClient(QObject):
             print("✅ Connection established!")
             self._connected = True
             self.connected_signal.emit()
+
+            # 연결 직후 대기 중인 상태(성격 등)가 있다면 전송
+            if self._pending_session_start_packet:
+                print("🚀 Sending Buffered Session Start")
+                await self._send_packet_async(self._pending_session_start_packet)
+                self._pending_session_start_packet = None # 1회성 이벤트이므로 삭제
+
+            if self._pending_personality_packet:
+                print(f"🚀 Sending Buffered Personality: {self._pending_personality_packet.data.get('personality')}")
+                await self._send_packet_async(self._pending_personality_packet)
             
         except Exception as e:
             print(f"❌ Connection Failed: {e}")
             self.error_signal.emit(str(e))
             self._connected = False
+            
+            # 초기 연결 실패 시에도 재시도 (선택 사항)
+            if self._should_reconnect:
+                print("🔄 초기 연결 실패. 3초 후 재시도합니다.")
+                asyncio.create_task(self._retry_connection())
+
+    async def _retry_connection(self):
+        """재연결 대기 및 시도"""
+        await asyncio.sleep(3)
+        if self._should_reconnect and not self._connected:
+            print("🔄 Reconnecting now...")
+            await self._connect_room()
 
     async def _disconnect_room(self):
         """실제 연결 해제 로직 (Coroutine)"""
@@ -152,12 +185,35 @@ class LiveKitClient(QObject):
         return self._connected
 
     def send_packet(self, packet: Packet):
+        # 성격 변경 패킷은 연결 여부와 상관없이 항상 최신 상태를 저장 (버퍼링)
+        if packet.event == SystemEvents.PERSONALITY_UPDATE:
+            print(f"📦 Buffering Personality: {packet.data.get('personality')}")
+            self._pending_personality_packet = packet
+        elif packet.event == SystemEvents.SESSION_START:
+             print(f"📦 Buffering Session Start Event")
+             self._pending_session_start_packet = packet
+
         """Packet을 LiveKit으로 전송"""
-        if not self._connected or not self.room or self._paused:
+        if not self._connected:
+            # print(f"⚠️ Packet dropped (Not Connected): {packet.event}")
+            return
+        
+        if not self.room:
+            print(f"⚠️ Packet dropped (No Room Object): {packet.event}")
+            return
+            
+        if self._paused:
+            print(f"⚠️ Packet dropped (Paused): {packet.event}")
             return
         
         # Room 연결 상태 확인
         if self.room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
+            print(f"⚠️ Packet dropped (Room Status: {self.room.connection_state}): {packet.event}")
+            try:
+                # 상태가 CONNECTED가 아니면 재연결 시도? 아니면 그냥 로그만.
+                pass 
+            except:
+                pass
             return
         
         # 워커 루프에 패킷 전송 태스크 제출
@@ -166,14 +222,19 @@ class LiveKitClient(QObject):
                 self._send_packet_async(packet),
                 self._worker.loop
             )
+        else:
+            print("⚠️ Packet dropped (Worker Loop Not Running)")
     
     async def _send_packet_async(self, packet: Packet):
         """비동기 패킷 전송"""
-        if not self.room or not self.room.local_participant: return
+        if not self.room or not self.room.local_participant: 
+            print("⚠️ Packet dropped (Async: No local participant)")
+            return
         try:
             data = packet.to_json().encode('utf-8')
             await self.room.local_participant.publish_data(
                 data, topic="detection", reliable=True
             )
+            print(f"📤 Packet Sent: {packet.event}")
         except Exception as e:
             print(f"Error sending packet: {e}")

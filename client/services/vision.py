@@ -683,3 +683,4 @@ class VisionWorker(QThread):
     def stop(self):
         """스레드 종료"""
         self.running = False
+        self.wait() # 스레드 종료 대기
