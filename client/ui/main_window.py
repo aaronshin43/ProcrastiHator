@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QGridLayout,
                              QVBoxLayout, QHBoxLayout, QFrame, QMainWindow, QPushButton, QScrollArea)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
-from client.ui.name import personality_cards, voice_data
+from client.ui.name import personality_cards, voice_data, PERSONALITY_PROMPTS
 from client.ui.pipboy_card import PipBoyCard
 from client.ui.pipboy_status_bar import PipBoyStatusBar
 from client.ui.pipboy_tab_bar import PipBoyTabBar
@@ -571,6 +571,15 @@ class MainWindow(QMainWindow):
                 if voice_id:
                     name.user_voice_id = voice_id
                 print(f"[PIP-BOY] 저장된 음성: {name.user_voice} (ID: {name.user_voice_id})")
+
+                # 음성 변경 즉시 전송
+                packet = Packet(
+                    event=SystemEvents.PERSONALITY_UPDATE,
+                    data={"voice_id": voice_id} if voice_id else {},
+                    meta=PacketMeta(category=PacketCategory.SYSTEM)
+                )
+                self.personality_changed_signal.emit(packet)
+
                 # 상세 정보 업데이트 (이미지 포함)
                 self.detail_panel.set_item(voice_name, f"Voice: {voice_name}", icon=icon_file)
                 # 스크롤하여 선택된 아이템 보이게
@@ -608,9 +617,12 @@ class MainWindow(QMainWindow):
                 print(f"[PIP-BOY] 저장된 성격: {name.user_personality}")
 
                 # 성격 변경 패킷 생성 및 시그널 방출
+                # 상세 성격 설명 가져오기 - PERSONALITY_PROMPTS에서 조회, 없으면 기본 desc 사용
+                detailed_desc = PERSONALITY_PROMPTS.get(title, desc)
+
                 packet_data = {
                     "personality": title,
-                    "description": desc
+                    "description": detailed_desc
                 }
                 # 보이스 ID가 선택되어 있다면 함께 전송
                 if hasattr(name, 'user_voice_id') and name.user_voice_id:

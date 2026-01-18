@@ -97,12 +97,12 @@ class FloatingWidget(QWidget):
         menu = QMenu(self)
         
         # 캐릭터 설정 액션
-        settings_action = QAction("캐릭터 설정", self)
+        settings_action = QAction("Settings", self)
         settings_action.triggered.connect(self.show_settings_signal.emit)
         menu.addAction(settings_action)
         
         # 일시정지 액션
-        pause_action = QAction("일시정지", self)
+        pause_action = QAction("Pause", self)
         pause_action.triggered.connect(self.pause_signal.emit)
         menu.addAction(pause_action)
         
@@ -110,7 +110,7 @@ class FloatingWidget(QWidget):
         menu.addSeparator()
         
         # 종료 액션
-        exit_action = QAction("종료", self)
+        exit_action = QAction("Quit", self)
         exit_action.triggered.connect(self.exit_signal.emit)
         menu.addAction(exit_action)
         
