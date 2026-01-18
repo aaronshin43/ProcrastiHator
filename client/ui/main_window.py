@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QGridLayout,
                              QVBoxLayout, QHBoxLayout, QFrame, QMainWindow, QPushButton, QScrollArea)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
-from client.ui.name import personality_cards, voice_data
+from client.ui.name import personality_cards, voice_data, PERSONALITY_PROMPTS
 from client.ui.pipboy_card import PipBoyCard
 from client.ui.pipboy_status_bar import PipBoyStatusBar
 from client.ui.pipboy_tab_bar import PipBoyTabBar
@@ -428,7 +428,7 @@ class MainWindow(QMainWindow):
         }
         
         # 새 아이템 생성
-        for i, voice_name in enumerate(voice_data):
+        for i, (voice_name, voice_id) in enumerate(voice_data):
             # 이전에 선택된 항목인지 확인
             is_selected = (voice_name == self.selected_voice_item)
             
@@ -437,7 +437,7 @@ class MainWindow(QMainWindow):
             
             item = PipBoyListItem(voice_name, icon=icon_file, is_selected=is_selected)
             # 람다 클로저 문제 해결: 기본값 사용
-            item.clicked.connect(lambda clicked_item, name=voice_name: self.handle_voice_item_click(clicked_item, name))
+            item.clicked.connect(lambda clicked_item, name=voice_name, vid=voice_id: self.handle_voice_item_click(clicked_item, name, vid))
             self.list_layout.addWidget(item)
             self.voice_items.append(item)
             
@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         # 세션 시작 시그널 발생
         self.toggle_session_signal.emit()
 
-    def handle_voice_item_click(self, clicked_item, voice_name):
+    def handle_voice_item_click(self, clicked_item, voice_name, voice_id=None):
         """Voice 아이템 클릭 처리"""
         if clicked_item is None:
             return
@@ -568,7 +568,18 @@ class MainWindow(QMainWindow):
                 self.selected_voice_item = voice_name
                 # 음성 저장
                 name.user_voice = voice_name
-                print(f"[PIP-BOY] 저장된 음성: {name.user_voice}")
+                if voice_id:
+                    name.user_voice_id = voice_id
+                print(f"[PIP-BOY] 저장된 음성: {name.user_voice} (ID: {name.user_voice_id})")
+
+                # 음성 변경 즉시 전송
+                packet = Packet(
+                    event=SystemEvents.PERSONALITY_UPDATE,
+                    data={"voice_id": voice_id} if voice_id else {},
+                    meta=PacketMeta(category=PacketCategory.SYSTEM)
+                )
+                self.personality_changed_signal.emit(packet)
+
                 # 상세 정보 업데이트 (이미지 포함)
                 self.detail_panel.set_item(voice_name, f"Voice: {voice_name}", icon=icon_file)
                 # 스크롤하여 선택된 아이템 보이게
@@ -606,12 +617,20 @@ class MainWindow(QMainWindow):
                 print(f"[PIP-BOY] 저장된 성격: {name.user_personality}")
 
                 # 성격 변경 패킷 생성 및 시그널 방출
+                # 상세 성격 설명 가져오기 - PERSONALITY_PROMPTS에서 조회, 없으면 기본 desc 사용
+                detailed_desc = PERSONALITY_PROMPTS.get(title, desc)
+
+                packet_data = {
+                    "personality": title,
+                    "description": detailed_desc
+                }
+                # 보이스 ID가 선택되어 있다면 함께 전송
+                if hasattr(name, 'user_voice_id') and name.user_voice_id:
+                     packet_data["voice_id"] = name.user_voice_id
+
                 packet = Packet(
                     event=SystemEvents.PERSONALITY_UPDATE,
-                    data={
-                        "personality": title,
-                        "description": desc
-                    },
+                    data=packet_data,
                     meta=PacketMeta(category=PacketCategory.SYSTEM)
                 )
                 self.personality_changed_signal.emit(packet)
@@ -684,7 +703,11 @@ class MainWindow(QMainWindow):
                     if self.current_tab == "VOICE":
                         # Voice 아이템의 경우
                         voice_name = item.text
-                        self.handle_voice_item_click(item, voice_name)
+                        # ID 찾기 (voice_data[i][1])
+                        voice_id = None
+                        if i < len(voice_data):
+                             voice_id = voice_data[i][1]
+                        self.handle_voice_item_click(item, voice_name, voice_id)
                     else:
                         # Personality 아이템의 경우 아이콘과 설명 찾기
                         for icon, title, desc in personality_cards:

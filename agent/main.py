@@ -146,7 +146,8 @@ async def entrypoint(ctx: JobContext):
         # B. LLM 멘트 생성
         try:
             text = await llm_handler.get_scolding(formatted_system_prompt, context_str)
-            logger.info(f"🗣️ 생성된 잔소리 ({current_persona}): {text}")
+            persona_name = current_persona.split('\n')[0]
+            logger.info(f"🗣️ 생성된 잔소리 ({persona_name}): {text}")
         except Exception as e:
             logger.error(f"LLM Error: {e}")
             return
@@ -238,7 +239,7 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.on("data_received")
     def on_data(data_packet, participant=None, kind=None, topic=None):
-        nonlocal current_persona, neutral_check_task # 외부 변수 수정을 위해 선언
+        nonlocal current_persona, neutral_check_task, tts_plugin # 외부 변수 수정을 위해 선언
         
         # 1. payload 추출 (DataPacket 객체일 수도, bytes일 수도 있음)
         try:
@@ -268,16 +269,31 @@ async def entrypoint(ctx: JobContext):
         try:
             # 0. 성격 변경 이벤트 처리
             if packet.event == SystemEvents.PERSONALITY_UPDATE:
-                p_name = packet.data.get("personality", "Unknown")
-                p_desc = packet.data.get("description", "")
+                p_voice_id = packet.data.get("voice_id")
                 
-                # 이름과 설명을 결합하여 LLM에게 풍부한 컨텍스트 제공
-                if p_desc:
-                    current_persona = f"{p_name}\n(Character Description: {p_desc})"
-                else:
-                    current_persona = p_name
+                # 성격 정보가 포함된 경우에만 업데이트
+                if "personality" in packet.data:
+                    p_name = packet.data.get("personality", "Unknown")
+                    p_desc = packet.data.get("description", "")
                     
-                logger.info(f"🎭 성격 변경됨: {current_persona}")
+                    # 이름과 설명을 결합하여 LLM에게 풍부한 컨텍스트 제공
+                    if p_desc:
+                        current_persona = f"{p_name}\n(Character Description: {p_desc})"
+                    else:
+                        current_persona = p_name
+                        
+                    logger.info(f"🎭 성격 변경됨: {p_name}")
+                
+                # 목소리 변경 (ID가 있을 경우)
+                if p_voice_id:
+                    logger.info(f"🗣️ Voice ID Update Requested: {p_voice_id}")
+                    try:
+                        # ElevenLabs TTS 플러그인 재설정 (voice_id 문자열 직접 전달)
+                        tts_plugin = elevenlabs.TTS(api_key=tts_api_key, voice_id=p_voice_id)
+                        logger.info(f"🗣️ TTS Voice Updated to: {p_voice_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to update voice: {e}")
+
                 return
 
             # 0.5 세션 시작 이벤트 (기억 초기화)
